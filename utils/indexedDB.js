@@ -2,9 +2,24 @@
 
 const DB_PREFIX = 'log_';
 
+// 生成唯一的数据库名称
+const generateUniqueFileName = async (fileName) => {
+    const existingFileNames = await getDatabaseNames();
+    let uniqueFileName = fileName;
+    let counter = 1;
+
+    while (existingFileNames.includes(uniqueFileName)) {
+        uniqueFileName = `${fileName}_${counter}`;
+        counter += 1;
+    }
+
+    return uniqueFileName;
+};
+
 // 保存日志到 IndexedDB
 export const saveLogToIndexedDB = async (fileName, logs) => {
-    const dbName = `${DB_PREFIX}${fileName}`;
+    const uniqueFileName = await generateUniqueFileName(fileName);
+    const dbName = `${DB_PREFIX}${uniqueFileName}`;
     const dbRequest = indexedDB.open(dbName, 1);
 
     dbRequest.onupgradeneeded = (event) => {
@@ -82,7 +97,6 @@ export const getDatabaseNames = () => {
         );
     });
 };
-
 
 // 删除 IndexedDB 数据库
 export const deleteDatabase = (fileName) => {
