@@ -1,9 +1,12 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { Box, Typography, Button, MenuItem, Select, InputLabel } from '@mui/material';
+import { Box, Typography, Button, MenuItem, Select, InputLabel, FormControl, FormControlLabel, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle, TextField, IconButton } from '@mui/material';
 import { VariableSizeList as List } from 'react-window';
 import { getDatabaseNames, fetchLogsFromIndexedDB, deleteDatabase } from '../utils/indexedDB';
 import Head from 'next/head';
 import { useRouter } from 'next/router';
+import SearchIcon from '@mui/icons-material/Search';
+import ArrowBackIosIcon from '@mui/icons-material/ArrowBackIos';
+import ArrowForwardIosIcon from '@mui/icons-material/ArrowForwardIos';
 
 // 解析日期
 const parseDate = (dateStr) => {
@@ -57,6 +60,11 @@ const DisplayPage = () => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [highlightedIndexes, setHighlightedIndexes] = useState({});
+    const [filterDialogOpen, setFilterDialogOpen] = useState(false);
+    const [filterStatus, setFilterStatus] = useState('');
+    const [filterContent, setFilterContent] = useState('');
+    const [searchQueries, setSearchQueries] = useState({});
+    const [searchIndexes, setSearchIndexes] = useState({});
     const listRefs = useRef({});
     const rowHeights = useRef({});
     const router = useRouter();
@@ -96,6 +104,33 @@ const DisplayPage = () => {
         getLogs();
     }, [selectedFiles]);
 
+    const handleReverse = () => {
+        const reversedLogs = {};
+        for (const file of selectedFiles) {
+            const logsFromFile = logs[file] || [];
+            reversedLogs[file] = logsFromFile.slice().reverse();
+        }
+        setLogs(reversedLogs);
+    };
+
+    const handleScrollToEnd = () => {
+        for (const file of selectedFiles) {
+            const listRef = listRefs.current[file];
+            if (listRef) {
+                listRef.scrollToItem(logs[file]?.length - 1, 'end');
+            }
+        }
+    };
+
+    const handleScrollToTop = () => {
+        for (const file of selectedFiles) {
+            const listRef = listRefs.current[file];
+            if (listRef) {
+                listRef.scrollToItem(0, 'start');
+            }
+        }
+    };
+
     const handleFileChange = (event) => {
         const { value } = event.target;
         setSelectedFiles(typeof value === 'string' ? value.split(',') : value);
@@ -129,6 +164,13 @@ const DisplayPage = () => {
             ERROR: 'bg-red-200 text-red-800'
         };
 
+        // 高亮关键词
+        const highlightedContent = log.content.split(new RegExp(`(${searchQueries[file]})`, 'gi')).map((part, i) => (
+            <span key={i} style={{ backgroundColor: searchQueries[file] && part.toLowerCase() === searchQueries[file].toLowerCase() ? 'yellow' : 'transparent' }}>
+                {part}
+            </span>
+        ));
+
         return (
             <div
                 style={style}
@@ -145,7 +187,7 @@ const DisplayPage = () => {
                         >
                             {log.status}
                         </span>
-                        : {log.content}
+                        : {highlightedContent}
                     </Typography>
                 </div>
             </div>
@@ -155,10 +197,8 @@ const DisplayPage = () => {
     const handleLogClick = (date, sourceFile) => {
         const clickedDate = parseDate(date);
         const clickedTime = clickedDate ? clickedDate.getTime() : NaN;
-        console.log('Clicked time:', clickedTime);
 
         if (isNaN(clickedTime)) {
-            console.log('Invalid date');
             return;
         }
 
@@ -203,13 +243,124 @@ const DisplayPage = () => {
         return rowsCount;
     }, [logs, selectedFiles]);
 
+    // 处理筛选对话框的打开和关闭
+    const handleFilterDialogOpen = () => {
+        setFilterDialogOpen(true);
+    };
+
+    const handleFilterDialogClose = () => {
+        setFilterDialogOpen(false);
+    };
+
+// 处理筛选操作
+    const handleFilter = async () => {
+        if (selectedFiles.length > 0) {
+            setLoading(true);
+            try {
+                const fetchedLogs = {};
+                for (const file of selectedFiles) {
+                    let logsFromDB = await fetchLogsFromIndexedDB(file);
+                    logsFromDB.sort((a, b) => parseDate(a.date) - parseDate(b.date));
+                    fetchedLogs[file] = logsFromDB.filter(log => {
+                        return (
+                            (!filterStatus || log.status === filterStatus) &&
+                            (!filterContent || log.content.includes(filterContent))
+                        );
+                    });
+                }
+                setLogs(fetchedLogs);
+                setLoading(false);
+                handleFilterDialogClose();
+            } catch (error) {
+                setError('Error fetching logs');
+                setLoading(false);
+            }
+        }
+    };
+
+    const handleCancelFilter = async () => {
+        if (selectedFiles.length > 0) {
+            setLoading(true);
+            try {
+                const fetchedLogs = {};
+                for (const file of selectedFiles) {
+                    let logsFromDB = await fetchLogsFromIndexedDB(file);
+                    logsFromDB.sort((a, b) => parseDate(a.date) - parseDate(b.date));
+                    fetchedLogs[file] = logsFromDB;
+                }
+                setLogs(fetchedLogs);
+                setLoading(false);
+                handleFilterDialogClose();
+            } catch (error) {
+                setError('Error fetching logs');
+                setLoading(false);
+            }
+        }
+    };
+
+// 搜索功能
+    const handleSearch = (file) => {
+        if (searchQueries[file]) {
+            const logEntries = logs[file] || [];
+            const matchingIndexes = logEntries
+                .map((log, index) => ({
+                    index,
+                    match: log.content.toLowerCase().includes(searchQueries[file].toLowerCase())
+                }))
+                .filter(entry => entry.match)
+                .map(entry => entry.index);
+            setSearchIndexes(prev => ({ ...prev, [file]: matchingIndexes }));
+
+            // 设置初始高亮索引为第一个匹配项（可选）
+            if (matchingIndexes.length > 0) {
+                setHighlightedIndexes(prev => ({ ...prev, [file]: matchingIndexes[0] }));
+            }
+        } else {
+            setSearchIndexes(prev => ({ ...prev, [file]: [] }));
+            setHighlightedIndexes(prev => ({ ...prev, [file]: null }));
+        }
+    };
+
+
+    const scrollToSearchIndex = (file, direction) => {
+        const indexes = searchIndexes[file] || [];
+        const currentHighlightedIndex = highlightedIndexes[file];
+
+        const currentIndex = indexes.findIndex(index => index === currentHighlightedIndex);
+
+        if (currentIndex === -1) {
+            console.error('Current index not found in search indexes');
+            return;
+        }
+
+        let newIndex;
+        if (direction === 'prev') {
+            newIndex = indexes[currentIndex - 1] !== undefined ? indexes[currentIndex - 1] : indexes[indexes.length - 1];
+        } else if (direction === 'next') {
+            newIndex = indexes[currentIndex + 1] !== undefined ? indexes[currentIndex + 1] : indexes[0];
+        } else {
+            console.error('Invalid direction:', direction);
+            return;
+        }
+
+        setHighlightedIndexes(prev => ({ ...prev, [file]: newIndex }));
+
+        const listRef = listRefs.current[file];
+        if (listRef) {
+            listRef.scrollToItem(newIndex, 'center');
+        } else {
+            console.error('List ref is not available for file:', file);
+        }
+    };
+
+
     return (
         <>
             <Head>
-                <title>Upload Logs - LogViewer</title>
+                <title>View Logs - LogViewer</title>
                 <meta name="description" content="Upload and parse log files in LogViewer" />
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
-                <link rel="icon" href="/favicon.ico" />
+                <link rel="icon" href="/logo.png" />
             </Head>
             <Box className="p-4 bg-gray-50" sx={{ height: '100vh', overflow: 'hidden' }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
@@ -222,20 +373,46 @@ const DisplayPage = () => {
                 </Box>
                 <Box sx={{ mb: 2 }}>
                     <InputLabel>Choose Log Files</InputLabel>
-                    <Select
-                        multiple
-                        value={selectedFiles}
-                        onChange={handleFileChange}
-                        renderValue={(selected) => selected.join(', ')}
-                        fullWidth
-                        sx={{ mb: 2 }}
-                    >
-                        {files.map((file, index) => (
-                            <MenuItem key={index} value={file}>{file}</MenuItem>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
+                        {files.map((file) => (
+                            <FormControlLabel
+                                key={file}
+                                control={
+                                    <Checkbox
+                                        checked={selectedFiles.includes(file)}
+                                        onChange={(event) => {
+                                            const newSelectedFiles = [...selectedFiles];
+                                            if (event.target.checked) {
+                                                newSelectedFiles.push(file);
+                                            } else {
+                                                const index = newSelectedFiles.indexOf(file);
+                                                if (index > -1) {
+                                                    newSelectedFiles.splice(index, 1);
+                                                }
+                                            }
+                                            setSelectedFiles(newSelectedFiles);
+                                        }}
+                                    />
+                                }
+                                label={file}
+                                sx={{ whiteSpace: 'nowrap' }}
+                            />
                         ))}
-                    </Select>
-                    <Button variant="contained" color="error" onClick={handleDelete} className="mt-2">
+                    </Box>
+                    <Button variant="contained" onClick={handleDelete} className="mt-2 mr-2 bg-red-500">
                         Delete Selected Logs
+                    </Button>
+                    <Button variant="contained" onClick={handleReverse} className="mt-2 ml-2 mr-2 bg-blue-500">
+                        Reverse Logs
+                    </Button>
+                    <Button variant="contained" onClick={handleScrollToEnd} className="mt-2 ml-2 mr-2 bg-green-500">
+                        Scroll to End
+                    </Button>
+                    <Button variant="contained" onClick={handleScrollToTop} className="mt-2 ml-2 mr-2 bg-green-500">
+                        Scroll to Top
+                    </Button>
+                    <Button variant="contained" color="primary" onClick={handleFilterDialogOpen} disabled={selectedFiles.length === 0} className="mt-2 ml-2">
+                        Filter Logs
                     </Button>
                 </Box>
                 {loading ? (
@@ -263,9 +440,27 @@ const DisplayPage = () => {
                                     position: 'relative',
                                 }}
                             >
-                                <Typography variant="h6" sx={{ p: 1, borderBottom: '1px solid #ddd' }}>
-                                    {file}
-                                </Typography>
+                                <Box sx={{ display: 'flex', alignItems: 'center', p: 1, borderBottom: '1px solid #ddd' }}>
+                                    <Typography variant="h6" sx={{ flex: 1 }}>
+                                        {file}
+                                    </Typography>
+                                    <TextField
+                                        variant="outlined"
+                                        size="small"
+                                        value={searchQueries[file] || ''}
+                                        onChange={(e) => setSearchQueries(prev => ({ ...prev, [file]: e.target.value }))}
+                                        placeholder="Search..."
+                                    />
+                                    <IconButton onClick={() => handleSearch(file)} size="small">
+                                        <SearchIcon />
+                                    </IconButton>
+                                    <IconButton onClick={() => scrollToSearchIndex(file, 'prev')} size="small" disabled={!searchIndexes[file]?.length}>
+                                        <ArrowBackIosIcon />
+                                    </IconButton>
+                                    <IconButton onClick={() => scrollToSearchIndex(file, 'next')} size="small" disabled={!searchIndexes[file]?.length}>
+                                        <ArrowForwardIosIcon />
+                                    </IconButton>
+                                </Box>
                                 <List
                                     height={window.innerHeight - 160} // Adjust the height as needed
                                     width={window.innerWidth / selectedFiles.length - 10} // Adjust width as needed
@@ -281,8 +476,37 @@ const DisplayPage = () => {
                     </Box>
                 )}
             </Box>
+            <Dialog open={filterDialogOpen} onClose={handleFilterDialogClose}>
+                <DialogTitle>Filter Logs</DialogTitle>
+                <DialogContent>
+                    <FormControl fullWidth>
+                        <InputLabel>Status</InputLabel>
+                        <Select
+                            value={filterStatus}
+                            onChange={(e) => setFilterStatus(e.target.value)}
+                        >
+                            <MenuItem value="">All</MenuItem>
+                            <MenuItem value="INFO">INFO</MenuItem>
+                            <MenuItem value="WARN">WARN</MenuItem>
+                            <MenuItem value="ERROR">ERROR</MenuItem>
+                        </Select>
+                    </FormControl>
+                    <TextField
+                        fullWidth
+                        label="Content"
+                        value={filterContent}
+                        onChange={(e) => setFilterContent(e.target.value)}
+                        margin="normal"
+                    />
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={handleFilterDialogClose}>Cancel</Button>
+                    <Button onClick={handleFilter} color="primary">Filter</Button>
+                    <Button onClick={handleCancelFilter} color="warning">Clear Filter</Button>
+                </DialogActions>
+            </Dialog>
         </>
     );
-};
+}
 
 export default DisplayPage;
