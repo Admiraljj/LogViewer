@@ -24,7 +24,7 @@ export default function Home() {
                         </Typography>
                         <Link href="/upload" passHref>
                             <Button variant="contained" color="primary">
-                                Let's View
+                                Let&apos;s View
                             </Button>
                         </Link>
                     </Box>
